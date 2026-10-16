@@ -1,6 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { cacheLife } from "next/cache";
 import type { Category, Price, PriceHistoryEntry, Product, SiteData, Store, UnitBasis } from "./types";
 
 const HISTORY_WEEKS = 6; // previous weeks shown in each item's price history
@@ -17,7 +16,8 @@ const localImages: Map<string, string> = (() => {
     return new Map(
       readdirSync(IMAGE_DIR)
         .filter((file) => IMAGE_EXTENSIONS.includes(path.extname(file).toLowerCase()))
-        .map((file) => [path.parse(file).name, `/products/${file}`]),
+        // Plain <img> tags don't get basePath added automatically (needed on GitHub Pages).
+        .map((file) => [path.parse(file).name, `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/products/${file}`]),
     );
   } catch {
     return new Map();
@@ -114,13 +114,13 @@ function demoHistory(products: Product[], currentWeek: string): Map<number, Pric
   return history;
 }
 
-/** Everything the page needs, read once per build from the exported data file. */
+/**
+ * Everything the page needs, read once at build time from the exported data file.
+ * Dates are relative to when the data was exported, so the build is reproducible.
+ */
 export async function getSiteData(): Promise<SiteData> {
-  "use cache";
-  cacheLife("max"); // the file only changes with a new deploy, which rebuilds the page
-
   const data = JSON.parse(readFileSync(DATA_FILE, "utf-8")) as ExportFile;
-  const now = new Date();
+  const now = new Date(data.generated_at);
   const currentWeek = mondayOf(now);
 
   // Only stores the collectors have actually checked can say "not found".
