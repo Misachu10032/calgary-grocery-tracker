@@ -49,19 +49,19 @@ export type Product = {
   image: string | null;
   prices: Price[]; // cheapest per unit first; rows without a per-unit price last
   missingStores: Store[]; // checked stores where this item was not found
+  history: PriceHistoryEntry[]; // previous weeks' lowest price, newest first; empty until history builds up
 };
 
-/** One past week of prices, keyed by product id (cheapest first). */
-export type HistoryWeek = {
-  start: string; // Monday, "2026-10-05"
-  pricesByProduct: Record<string, Price[]>;
+/** The lowest per-unit price of a product in one past week, and where it was. */
+export type PriceHistoryEntry = {
+  week: string; // Monday of that week, "2026-10-05"
+  price: Price;
 };
 
 export type SiteData = {
   products: Product[];
   categories: Category[];
   stores: Store[];
-  history: HistoryWeek[]; // previous weeks, newest first; empty until history builds up
   lastUpdated: string | null; // ISO timestamp of the latest collector run
   builtAt: string; // ISO timestamp of this build
 };

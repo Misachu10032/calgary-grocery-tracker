@@ -1,9 +1,9 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { cacheLife } from "next/cache";
-import type { Category, HistoryWeek, Price, Product, SiteData, Store, UnitBasis } from "./types";
+import type { Category, Price, PriceHistoryEntry, Product, SiteData, Store, UnitBasis } from "./types";
 
-const HISTORY_WEEKS = 8; // previous weeks offered in the week picker
+const HISTORY_WEEKS = 6; // previous weeks shown in each item's price history
 
 // Product photos dropped into public/products/<slug>.<ext> are picked up at build time.
 const IMAGE_DIR = path.join(process.cwd(), "public", "products");
@@ -60,47 +60,61 @@ function mondayOf(date: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Previous weeks' best prices, newest first (the current week comes from latest_prices). */
-function buildHistory(rows: WeeklyPriceRow[], currentWeek: string): HistoryWeek[] {
-  const weeks = new Map<string, Record<string, Price[]>>();
+/**
+ * Each product's lowest per-unit price in each previous week (across all stores),
+ * newest first. The current week comes from latest_prices instead.
+ */
+function buildHistory(rows: WeeklyPriceRow[], currentWeek: string): Map<number, PriceHistoryEntry[]> {
+  const best = new Map<number, Map<string, Price>>();
   for (const { week_start, product_id, ...price } of rows) {
     if (week_start >= currentWeek) continue;
-    const week = weeks.get(week_start) ?? {};
-    (week[product_id] ??= []).push(price);
-    weeks.set(week_start, week);
+    const weeks = best.get(product_id) ?? new Map<string, Price>();
+    const current = weeks.get(week_start);
+    if (!current || byUnitPrice(price, current) < 0) weeks.set(week_start, price);
+    best.set(product_id, weeks);
   }
-  return [...weeks.entries()]
-    .sort(([a], [b]) => b.localeCompare(a))
-    .slice(0, HISTORY_WEEKS)
-    .map(([start, pricesByProduct]) => {
-      for (const list of Object.values(pricesByProduct)) list.sort(byUnitPrice);
-      return { start, pricesByProduct };
-    });
+  const history = new Map<number, PriceHistoryEntry[]>();
+  for (const [productId, weeks] of best) {
+    history.set(
+      productId,
+      [...weeks.entries()]
+        .sort(([a], [b]) => b.localeCompare(a))
+        .slice(0, HISTORY_WEEKS)
+        .map(([week, price]) => ({ week, price })),
+    );
+  }
+  return history;
 }
 
 /**
- * Local preview only: `DEMO_HISTORY=1 npm run build` fakes two past weeks from the
- * current prices (±10%) so the week picker can be tried before real history exists.
- * Never set this in production.
+ * Local preview only: `DEMO_HISTORY=1 npm run build` fakes three past weeks from the
+ * current best prices so the price-history dropdown can be tried before real history
+ * exists. Never set this in production.
  */
-function demoHistory(products: Product[], currentWeek: string): HistoryWeek[] {
-  return [1, 2].map((weeksAgo) => {
-    const start = new Date(`${currentWeek}T00:00:00Z`);
-    start.setUTCDate(start.getUTCDate() - 7 * weeksAgo);
-    const startText = start.toISOString().slice(0, 10);
-    const factor = weeksAgo === 1 ? 1.08 : 0.94;
-    const pricesByProduct: Record<string, Price[]> = {};
-    for (const p of products) {
-      pricesByProduct[p.id] = p.prices.slice(0, weeksAgo === 1 ? undefined : 2).map((x) => ({
-        ...x,
-        price: Math.round(x.price * factor * 100) / 100,
-        per_unit: x.per_unit == null ? null : Math.round(x.per_unit * factor * 1000) / 1000,
-        observed_on: startText,
-        valid_to: null,
-      }));
-    }
-    return { start: startText, pricesByProduct };
-  });
+function demoHistory(products: Product[], currentWeek: string): Map<number, PriceHistoryEntry[]> {
+  const factors = [1.08, 0.94, 1.15];
+  const history = new Map<number, PriceHistoryEntry[]>();
+  for (const p of products) {
+    const entries: PriceHistoryEntry[] = [];
+    factors.forEach((factor, i) => {
+      const source = p.prices[i % Math.max(p.prices.length, 1)];
+      if (!source) return;
+      const start = new Date(`${currentWeek}T00:00:00Z`);
+      start.setUTCDate(start.getUTCDate() - 7 * (i + 1));
+      const week = start.toISOString().slice(0, 10);
+      entries.push({
+        week,
+        price: {
+          ...source,
+          price: Math.round(source.price * factor * 100) / 100,
+          per_unit: source.per_unit == null ? null : Math.round(source.per_unit * factor * 1000) / 1000,
+          observed_on: week,
+        },
+      });
+    });
+    history.set(p.id, entries);
+  }
+  return history;
 }
 
 /** Everything the page needs, fetched once per build (7 small requests). */
@@ -159,8 +173,13 @@ export async function getSiteData(): Promise<SiteData> {
       image: p.image_url || localImages.get(p.slug) || null,
       prices: productPrices,
       missingStores: checkedStores.filter((s) => !foundAt.has(s.id)),
+      history: [],
     };
   });
+
+  const history =
+    process.env.DEMO_HISTORY === "1" ? demoHistory(products, currentWeek) : buildHistory(weekly, currentWeek);
+  for (const p of products) p.history = history.get(p.id) ?? [];
 
   const usedCategories = new Set(products.flatMap((p) => p.categories));
   return {
@@ -169,8 +188,6 @@ export async function getSiteData(): Promise<SiteData> {
       .filter((c) => usedCategories.has(c.slug))
       .map(({ slug, name_en, name_zh }) => ({ slug, name_en, name_zh })),
     stores: checkedStores,
-    history:
-      process.env.DEMO_HISTORY === "1" ? demoHistory(products, currentWeek) : buildHistory(weekly, currentWeek),
     lastUpdated: runs.find((r) => r.finished_at)?.finished_at ?? null,
     builtAt: now.toISOString(),
   };

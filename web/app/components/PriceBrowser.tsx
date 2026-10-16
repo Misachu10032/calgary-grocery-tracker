@@ -13,7 +13,7 @@ import {
   unitLabel,
   weekLabel,
 } from "@/lib/format";
-import type { HistoryWeek, Price, Product, SiteData, Store, WeightUnit } from "@/lib/types";
+import type { Price, PriceHistoryEntry, Product, SiteData, Store, WeightUnit } from "@/lib/types";
 import { BasketIcon, ChevronDownIcon, ClockIcon, ExternalIcon, HistoryIcon, SearchIcon, TagIcon } from "./Icons";
 import { ProductImage } from "./ProductImage";
 
@@ -54,25 +54,11 @@ function saveWeightUnit(unit: WeightUnit) {
   window.dispatchEvent(new Event(WEIGHT_UNIT_EVENT));
 }
 
-const CURRENT_WEEK = "current";
-
 export function PriceBrowser({ data }: { data: SiteData }) {
   const [category, setCategory] = useState<string>("all");
   const [query, setQuery] = useState("");
-  const [week, setWeek] = useState<string>(CURRENT_WEEK);
   const weightUnit = useSyncExternalStore(subscribeWeightUnit, readWeightUnit, () => "100g" as WeightUnit);
   const chooseWeightUnit = saveWeightUnit;
-
-  // A past week swaps in that week's prices; products and categories stay the same.
-  const historyWeek = data.history.find((h) => h.start === week) ?? null;
-  const products = useMemo(() => {
-    if (!historyWeek) return data.products;
-    return data.products.map((p) => {
-      const prices = historyWeek.pricesByProduct[p.id] ?? [];
-      const foundAt = new Set(prices.map((x) => x.store_id));
-      return { ...p, prices, missingStores: data.stores.filter((s) => !foundAt.has(s.id)) };
-    });
-  }, [data.products, data.stores, historyWeek]);
 
   const storesById = useMemo(() => new Map(data.stores.map((s) => [s.id, s])), [data.stores]);
   const counts = useMemo(() => {
@@ -83,13 +69,13 @@ export function PriceBrowser({ data }: { data: SiteData }) {
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return products.filter((p) => {
+    return data.products.filter((p) => {
       if (category !== "all" && !p.categories.includes(category)) return false;
       if (!q) return true;
       const haystack = [p.name_en, p.slug, ...p.prices.map((x) => x.item_name)].join(" ").toLowerCase();
       return haystack.includes(q);
     });
-  }, [products, category, query]);
+  }, [data.products, category, query]);
 
   // "All" without a search shows one section per category; otherwise a single grid.
   const sections = useMemo(() => {
@@ -162,29 +148,8 @@ export function PriceBrowser({ data }: { data: SiteData }) {
               />
             ))}
           </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
-            <WeekPicker history={data.history} value={week} onChange={setWeek} />
-            {showWeightToggle && <WeightToggle value={weightUnit} onChange={chooseWeightUnit} />}
-          </div>
+          {showWeightToggle && <WeightToggle value={weightUnit} onChange={chooseWeightUnit} />}
         </nav>
-
-        {historyWeek && (
-          <div className="mb-8 flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
-            <p className="flex items-center gap-2">
-              <HistoryIcon className="h-4 w-4 shrink-0" />
-              <span>
-                Showing prices from <strong>{weekLabel(historyWeek.start)}</strong>. These prices may have changed.
-              </span>
-            </p>
-            <button
-              type="button"
-              onClick={() => setWeek(CURRENT_WEEK)}
-              className="self-start rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-800 sm:self-auto dark:bg-amber-200 dark:text-amber-950"
-            >
-              Back to this week
-            </button>
-          </div>
-        )}
 
         {visible.length === 0 ? (
           <div className="rounded-3xl border border-dashed border-neutral-300 p-12 text-center text-neutral-500 dark:border-neutral-700">
@@ -207,7 +172,6 @@ export function PriceBrowser({ data }: { data: SiteData }) {
                     storesById={storesById}
                     builtAt={data.builtAt}
                     weightUnit={weightUnit}
-                    isHistory={historyWeek !== null}
                   />
                 ))}
               </div>
@@ -224,9 +188,6 @@ export function PriceBrowser({ data }: { data: SiteData }) {
           {foundCount} of {data.products.length} items found this week
           {data.lastUpdated ? ` · last checked ${shortDate(data.lastUpdated)}` : ""}.
         </p>
-        {data.history.length === 0 && (
-          <p className="mt-1">Price history starts building with each weekly update; past weeks will appear in the week picker.</p>
-        )}
       </footer>
     </div>
   );
@@ -266,69 +227,58 @@ function CategoryPill({
   );
 }
 
-/** "This week" plus a dropdown of past weeks; a disabled placeholder until history exists. */
-function WeekPicker({
-  history,
-  value,
-  onChange,
-}: {
-  history: HistoryWeek[];
-  value: string;
-  onChange: (week: string) => void;
-}) {
-  const isCurrent = value === CURRENT_WEEK;
+/** Collapsible list of an item's lowest per-unit price in each previous week, and which store had it. */
+function PriceHistory({ history, weightUnit }: { history: PriceHistoryEntry[]; weightUnit: WeightUnit }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs font-medium text-neutral-500">Week</span>
-      <div role="group" aria-label="Week" className="flex items-center rounded-full bg-white p-1 ring-1 ring-black/5 dark:bg-neutral-900 dark:ring-white/10">
-        <button
-          type="button"
-          aria-pressed={isCurrent}
-          onClick={() => onChange(CURRENT_WEEK)}
-          className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-            isCurrent
-              ? "bg-neutral-900 text-white shadow-sm dark:bg-white dark:text-neutral-900"
-              : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-white/10"
-          }`}
-        >
-          This week
-        </button>
-        {history.length > 0 ? (
-          <label className="relative">
-            <span className="sr-only">Past weeks</span>
-            <select
-              value={isCurrent ? "" : value}
-              onChange={(e) => onChange(e.target.value)}
-              className={`cursor-pointer appearance-none rounded-full py-1 pl-3 pr-7 text-xs font-semibold outline-none transition ${
-                isCurrent
-                  ? "bg-transparent text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-white/10"
-                  : "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900"
-              }`}
-            >
-              <option value="" disabled>
-                Past weeks
-              </option>
-              {history.map((h) => (
-                <option key={h.start} value={h.start}>
-                  {weekLabel(h.start)}
-                </option>
-              ))}
-            </select>
-            <ChevronDownIcon
-              className={`pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ${isCurrent ? "text-neutral-400" : "text-white dark:text-neutral-900"}`}
-            />
-          </label>
+    <div className="mt-3 rounded-2xl bg-neutral-50 dark:bg-white/5">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between gap-2 rounded-2xl px-3 py-2 text-xs font-medium text-neutral-600 transition hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-white/10"
+      >
+        <span className="flex items-center gap-1.5">
+          <HistoryIcon className="h-3.5 w-3.5" />
+          Price history
+          {history.length > 0 && (
+            <span className="text-neutral-400">
+              · {history.length} week{history.length > 1 ? "s" : ""}
+            </span>
+          )}
+        </span>
+        <ChevronDownIcon className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open &&
+        (history.length === 0 ? (
+          <p className="px-3 pb-3 text-xs leading-relaxed text-neutral-500">
+            No previous weeks yet. The lowest price from each past week will appear here after the next weekly
+            update.
+          </p>
         ) : (
-          <span
-            title="Past weeks appear here after the next weekly price update."
-            aria-disabled="true"
-            className="flex cursor-not-allowed items-center gap-1 px-3 py-1 text-xs font-medium text-neutral-400"
-          >
-            <HistoryIcon className="h-3.5 w-3.5" />
-            Past weeks · soon
-          </span>
-        )}
-      </div>
+          <ul className="px-3 pb-1">
+            <li className="flex justify-between pb-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
+              <span>Week · lowest at</span>
+              <span>Price</span>
+            </li>
+            {history.map(({ week, price }) => (
+              <li
+                key={week}
+                className="flex items-center justify-between gap-3 border-t border-black/5 py-2 text-xs dark:border-white/10"
+              >
+                <div className="min-w-0">
+                  <p className="font-medium text-neutral-700 dark:text-neutral-200">{weekLabel(week)}</p>
+                  <p className="truncate text-neutral-500" title={price.item_name}>
+                    {price.chain}
+                  </p>
+                </div>
+                <span className="shrink-0 font-semibold tabular-nums">
+                  {perUnitText(price, weightUnit) ?? shelfPriceText(price)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ))}
     </div>
   );
 }
@@ -364,13 +314,11 @@ function ProductCard({
   storesById,
   builtAt,
   weightUnit,
-  isHistory,
 }: {
   product: Product;
   storesById: Map<string, Store>;
   builtAt: string;
   weightUnit: WeightUnit;
-  isHistory: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const best = product.prices.find((p) => p.per_unit != null) ?? null;
@@ -401,7 +349,7 @@ function ProductCard({
 
         {product.prices.length === 0 ? (
           <div className="mt-4 flex flex-1 items-center justify-center rounded-2xl bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500 dark:bg-white/5">
-            {isHistory ? "No prices recorded for this week." : "Not found in this week's flyers or store websites."}
+            Not found in this week&apos;s flyers or store websites.
           </div>
         ) : (
           <ul className="mt-3 divide-y divide-black/5 dark:divide-white/10">
@@ -413,7 +361,6 @@ function ProductCard({
                 fallbackUrl={storesById.get(price.store_id)?.website ?? null}
                 builtAt={builtAt}
                 weightUnit={weightUnit}
-                isHistory={isHistory}
               />
             ))}
           </ul>
@@ -428,6 +375,8 @@ function ProductCard({
             Show {hidden} more store{hidden > 1 ? "s" : ""}
           </button>
         )}
+
+        <PriceHistory history={product.history} weightUnit={weightUnit} />
 
         {product.missingStores.length > 0 && (
           <p className="mt-auto pt-3 text-xs leading-relaxed text-neutral-400">
@@ -445,21 +394,18 @@ function PriceRow({
   fallbackUrl,
   builtAt,
   weightUnit,
-  isHistory,
 }: {
   price: Price;
   isBest: boolean;
   fallbackUrl: string | null;
   builtAt: string;
   weightUnit: WeightUnit;
-  isHistory: boolean;
 }) {
   const perUnit = perUnitText(price, weightUnit);
   const container = price.unit_basis === "container" ? containerText(price) : null;
   const detail = container ? `${container} · ${money(price.price)}` : shelfPriceText(price);
   const href = price.url ?? fallbackUrl;
-  // Past weeks are old by definition; only flag stale prices in the current view.
-  const stale = !isHistory && daysBetween(price.observed_on, builtAt) > STALE_AFTER_DAYS;
+  const stale = daysBetween(price.observed_on, builtAt) > STALE_AFTER_DAYS;
   const membersOnly = /member/i.test(price.conditions ?? "") && !/more rewards members:/i.test(price.conditions ?? "");
 
   return (
