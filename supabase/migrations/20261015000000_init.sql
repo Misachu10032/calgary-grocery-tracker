@@ -120,7 +120,8 @@ create index scrape_runs_store_started_idx on scrape_runs (store_id, started_at 
 -- ─── Views for the website ─────────────────────────────────────────────────
 -- security_invoker: views respect the caller's RLS instead of bypassing it.
 
--- Latest known price of each tracked product at each store.
+-- Latest known price of each tracked product at each store; when a store has
+-- several matches on the same day, the cheapest per 100 g / 100 mL wins.
 create view latest_prices
 with (security_invoker = true) as
 select distinct on (p.product_id, p.store_id)
@@ -139,7 +140,7 @@ join stores   s  on s.id  = p.store_id
 where p.product_id is not null
   and not p.needs_review
   and (p.valid_to is null or p.valid_to >= current_date)
-order by p.product_id, p.store_id, p.observed_on desc, p.checked_at desc;
+order by p.product_id, p.store_id, p.observed_on desc, p.per_unit asc nulls last, p.price asc;
 
 -- This week's flyer deals (tracked or not) that are still valid.
 create view current_deals
@@ -198,7 +199,7 @@ insert into stores (id, chain, name, address, postal_code, external_id, website)
   ('saveon-heritage',       'Save-On-Foods',  'Heritage',        '#100 - 8855 Macleod Trail SW',   'T2H 0M2', '6634', 'https://www.saveonfoods.com'),
   ('walmart-tsuutina',      'Walmart',        'Tsuu T''ina',     null,                             'T2W 9Z0', '3010', 'https://www.walmart.ca'),
   ('nofrills-calgary',      'No Frills',      'Calgary (flyer)', null,                             'T2P',     null,   'https://www.nofrills.ca'),
-  ('superstore-calgary',    'Real Canadian Superstore', 'Calgary (flyer)', null,                   'T2P',     null,   'https://www.realcanadiansuperstore.ca'),
+  ('superstore-calgary',    'Superstore',     'Calgary (flyer)', null,                             'T2P',     null,   'https://www.realcanadiansuperstore.ca'),
   ('wholesaleclub-calgary', 'Wholesale Club', 'Calgary (flyer)', null,                             'T2P',     null,   'https://www.wholesaleclub.ca'),
   ('freshco-calgary',       'FreshCo',        'Calgary (flyer)', null,                             'T2P',     null,   'https://www.freshco.com'),
   ('costco-calgary',        'Costco',         'Calgary (online)', null,                            'T2P',     null,   'https://www.costco.ca');
