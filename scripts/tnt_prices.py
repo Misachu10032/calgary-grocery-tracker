@@ -11,19 +11,14 @@ Google Chrome with Playwright and calls T&T's own GraphQL search from inside
 the page, with the Calgary store headers the site itself sends.
 """
 import argparse
-import os
 import sys
 import time
 from datetime import date
-from pathlib import Path
 
-import psycopg2
-import psycopg2.extras
-from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
-from flipp_prices import (LB_IN_G, SANE_RANGE, UPSERT_PRICE, finish_run, load_products, matches,
-                          parse_pack, parse_size, start_run)
+from db import connect, finish_run, save_prices, start_run
+from flipp_prices import LB_IN_G, SANE_RANGE, load_products, matches, parse_pack, parse_size
 
 STORE_ID = "tnt-deerfoot"
 HOME_URL = "https://www.tntsupermarket.com/eng/"
@@ -104,7 +99,7 @@ def build_row(item, product):
         "valid_to": None,
         "url": PRODUCT_URL.format(path=f"{item.get('url_key')}{item.get('url_suffix') or ''}"),
         "needs_review": per_unit is not None and not (low <= per_unit <= high),
-        "raw": psycopg2.extras.Json(item),
+        "raw": item,
         "observed_on": date.today(),
         "pack_count": pack_count,
         "container_size": container_size,
@@ -152,30 +147,25 @@ def main():
     parser.add_argument("--headed", action="store_true", help="show the Chrome window")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
-    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-    conn = psycopg2.connect(os.environ["SUPABASE_DB_URL"])
+    conn = connect()
     try:
-        with conn.cursor() as cur:
-            products = load_products(cur)
+        products = load_products(conn)
         print(f"T&T Deerfoot: searching {len(products)} product(s)…")
         run_id = None
         if not args.dry_run:
-            with conn.cursor() as cur:
-                run_id = start_run(cur, STORE_ID, source="website")
+            run_id = start_run(conn, STORE_ID, "website")
             conn.commit()
         try:
             rows = collect(products, args.headed)
             if not args.dry_run:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_batch(cur, UPSERT_PRICE, rows)
-                    finish_run(cur, run_id, "ok", len(rows), f"{len(products)} product(s) searched")
+                save_prices(conn, rows)
+                finish_run(conn, run_id, "ok", len(rows), f"{len(products)} product(s) searched")
                 conn.commit()
         except Exception as exc:
             conn.rollback()
             if run_id is not None:
-                with conn.cursor() as cur:
-                    finish_run(cur, run_id, "blocked" if "HTTP 403" in str(exc) else "error", 0, str(exc)[:500])
+                finish_run(conn, run_id, "blocked" if "HTTP 403" in str(exc) else "error", 0, str(exc)[:500])
                 conn.commit()
             raise
 

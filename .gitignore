@@ -3,6 +3,13 @@
 .env.*
 !.env.example
 
+# Local price database: stays on this computer (only web/data/site-data.json is published).
+# Back it up yourself; it holds the full price history.
+/data/*.db
+/data/*.db-journal
+/data/*.db-wal
+/data/*.db-shm
+
 # Python
 __pycache__/
 *.pyc

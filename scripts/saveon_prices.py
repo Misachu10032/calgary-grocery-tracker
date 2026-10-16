@@ -1,6 +1,6 @@
 """Save-On-Foods website collector: looks up tracked products that have
 website_queries (e.g. energy drinks, protein) at the Calgary Heritage store and
-saves their current shelf prices to Supabase.
+saves their current shelf prices to the local database (data/prices.db).
 
 Usage:
     python scripts/saveon_prices.py              # fetch and save
@@ -13,21 +13,15 @@ in `conditions` but not applied.
 """
 import argparse
 import json
-import os
 import re
 import sys
 import time
 import urllib.parse
 import urllib.request
 from datetime import date
-from pathlib import Path
 
-import psycopg2
-import psycopg2.extras
-from dotenv import load_dotenv
-
-from flipp_prices import (SANE_RANGE, UPSERT_PRICE, finish_run, load_products, matches,
-                          parse_pack, parse_size, start_run)
+from db import connect, finish_run, save_prices, start_run
+from flipp_prices import SANE_RANGE, load_products, matches, parse_pack, parse_size
 
 STORE_ID = "saveon-heritage"
 PREVIEW_URL = "https://storefrontgateway.saveonfoods.com/api/stores/{rsid}/preview?q={query}"
@@ -131,7 +125,7 @@ def build_row(item, product, rsid):
         "valid_to": valid_to,
         "url": PRODUCT_URL.format(rsid=rsid, slug=slugify(item.get("name")), sku=item["sku"]),
         "needs_review": per_unit is not None and not (low <= per_unit <= high),
-        "raw": psycopg2.extras.Json(slim),
+        "raw": slim,
         "observed_on": date.today(),
         "pack_count": pack_count,
         "container_size": container_size,
@@ -170,33 +164,27 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="print matches without writing to the database")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
-    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-    conn = psycopg2.connect(os.environ["SUPABASE_DB_URL"])
+    conn = connect()
     try:
-        with conn.cursor() as cur:
-            cur.execute("select external_id from stores where id = %s", (STORE_ID,))
-            rsid = cur.fetchone()[0]
-            products = [p for p in load_products(cur) if p["website_queries"]]
+        rsid = conn.execute("select external_id from stores where id = ?", (STORE_ID,)).fetchone()[0]
+        products = [p for p in load_products(conn) if p["website_queries"]]
         print(f"Save-On-Foods store {rsid}: {len(products)} product(s) with website queries…")
 
         run_id = None
         if not args.dry_run:
-            with conn.cursor() as cur:
-                run_id = start_run(cur, STORE_ID, source="website")
+            run_id = start_run(conn, STORE_ID, "website")
             conn.commit()
         try:
             rows = collect(products, rsid)
             if not args.dry_run:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_batch(cur, UPSERT_PRICE, rows)
-                    finish_run(cur, run_id, "ok", len(rows), f"{len(products)} product(s) searched")
+                save_prices(conn, rows)
+                finish_run(conn, run_id, "ok", len(rows), f"{len(products)} product(s) searched")
                 conn.commit()
         except Exception as exc:
             conn.rollback()
             if run_id is not None:
-                with conn.cursor() as cur:
-                    finish_run(cur, run_id, "error", 0, str(exc)[:500])
+                finish_run(conn, run_id, "error", 0, str(exc)[:500])
                 conn.commit()
             raise
 

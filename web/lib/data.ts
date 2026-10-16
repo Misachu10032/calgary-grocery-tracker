@@ -1,9 +1,13 @@
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { cacheLife } from "next/cache";
 import type { Category, Price, PriceHistoryEntry, Product, SiteData, Store, UnitBasis } from "./types";
 
 const HISTORY_WEEKS = 6; // previous weeks shown in each item's price history
+
+// Written by scripts/export_site_data.py from the local SQLite database and
+// committed to git; pushing a new version makes Vercel rebuild the site.
+const DATA_FILE = path.join(process.cwd(), "data", "site-data.json");
 
 // Product photos dropped into public/products/<slug>.<ext> are picked up at build time.
 const IMAGE_DIR = path.join(process.cwd(), "public", "products");
@@ -20,24 +24,6 @@ const localImages: Map<string, string> = (() => {
   }
 })();
 
-async function query<T>(pathAndQuery: string): Promise<T> {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_ANON_KEY;
-  if (!url || !key) {
-    throw new Error("Set SUPABASE_URL and SUPABASE_ANON_KEY (read-only publishable key).");
-  }
-  const headers: Record<string, string> = { apikey: key };
-  // Legacy anon keys are JWTs and also go in Authorization; publishable keys must not.
-  if (key.startsWith("eyJ")) headers.Authorization = `Bearer ${key}`;
-  // no-store: every build must read fresh prices. `use cache` on getSiteData still
-  // makes the page static; without this, rebuilds could reuse last week's fetch cache.
-  const res = await fetch(`${url}/rest/v1/${pathAndQuery}`, { headers, cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Supabase ${pathAndQuery.split("?")[0]}: ${res.status} ${await res.text()}`);
-  }
-  return res.json() as Promise<T>;
-}
-
 type ProductRow = {
   id: number;
   slug: string;
@@ -48,12 +34,23 @@ type ProductRow = {
 };
 type LatestPriceRow = Price & { product_id: number };
 type WeeklyPriceRow = LatestPriceRow & { week_start: string };
-type RunRow = { store_id: string | null; finished_at: string | null };
+
+/** Shape of web/data/site-data.json (see scripts/export_site_data.py). */
+type ExportFile = {
+  generated_at: string;
+  products: ProductRow[];
+  categories: (Category & { sort_order: number })[];
+  product_categories: { product_id: number; category: string }[];
+  stores: Store[];
+  latest_prices: LatestPriceRow[];
+  weekly_prices: WeeklyPriceRow[];
+  runs: { store_id: string; finished_at: string | null }[];
+};
 
 const byUnitPrice = (a: Price, b: Price) =>
   (a.per_unit ?? Number.POSITIVE_INFINITY) - (b.per_unit ?? Number.POSITIVE_INFINITY) || a.price - b.price;
 
-/** Monday (UTC date) of the week containing `date`, as "YYYY-MM-DD". Matches Postgres date_trunc('week'). */
+/** Monday (UTC date) of the week containing `date`, as "YYYY-MM-DD"; matches the export's weeks. */
 function mondayOf(date: Date): string {
   const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
@@ -117,50 +114,34 @@ function demoHistory(products: Product[], currentWeek: string): Map<number, Pric
   return history;
 }
 
-/** Everything the page needs, fetched once per build (7 small requests). */
+/** Everything the page needs, read once per build from the exported data file. */
 export async function getSiteData(): Promise<SiteData> {
   "use cache";
-  cacheLife("weeks");
+  cacheLife("max"); // the file only changes with a new deploy, which rebuilds the page
 
+  const data = JSON.parse(readFileSync(DATA_FILE, "utf-8")) as ExportFile;
   const now = new Date();
   const currentWeek = mondayOf(now);
-  const historyFrom = mondayOf(new Date(now.getTime() - HISTORY_WEEKS * 7 * 86_400_000));
 
-  const [productRows, categories, links, stores, prices, runs, weekly] = await Promise.all([
-    query<ProductRow[]>("products?select=id,slug,name_en,name_zh,unit_basis,image_url&order=id"),
-    query<(Category & { sort_order: number })[]>(
-      "categories?select=slug,name_en,name_zh,sort_order&order=sort_order",
-    ),
-    query<{ product_id: number; categories: { slug: string } }[]>(
-      "product_categories?select=product_id,categories(slug)",
-    ),
-    query<Store[]>("stores?select=id,chain,name,website&order=chain"),
-    query<LatestPriceRow[]>("latest_prices?select=*"),
-    query<RunRow[]>("scrape_runs?select=store_id,finished_at&status=eq.ok&order=finished_at.desc&limit=500"),
-    query<WeeklyPriceRow[]>(
-      `weekly_prices?select=*&week_start=gte.${historyFrom}&week_start=lt.${currentWeek}&order=week_start.desc`,
-    ),
-  ]);
-
-  // Only stores the collector has actually checked can say "not found".
-  const checkedStoreIds = new Set(runs.map((r) => r.store_id).filter(Boolean));
-  const checkedStores = stores.filter((s) => checkedStoreIds.has(s.id));
+  // Only stores the collectors have actually checked can say "not found".
+  const checkedStoreIds = new Set(data.runs.map((r) => r.store_id));
+  const checkedStores = data.stores.filter((s) => checkedStoreIds.has(s.id));
 
   const categoriesByProduct = new Map<number, string[]>();
-  for (const link of links) {
+  for (const link of data.product_categories) {
     const list = categoriesByProduct.get(link.product_id) ?? [];
-    list.push(link.categories.slug);
+    list.push(link.category);
     categoriesByProduct.set(link.product_id, list);
   }
 
   const pricesByProduct = new Map<number, Price[]>();
-  for (const { product_id, ...price } of prices) {
+  for (const { product_id, ...price } of data.latest_prices) {
     const list = pricesByProduct.get(product_id) ?? [];
     list.push(price);
     pricesByProduct.set(product_id, list);
   }
 
-  const products: Product[] = productRows.map((p) => {
+  const products: Product[] = data.products.map((p) => {
     const productPrices = (pricesByProduct.get(p.id) ?? []).sort(byUnitPrice);
     const foundAt = new Set(productPrices.map((price) => price.store_id));
     return {
@@ -178,17 +159,22 @@ export async function getSiteData(): Promise<SiteData> {
   });
 
   const history =
-    process.env.DEMO_HISTORY === "1" ? demoHistory(products, currentWeek) : buildHistory(weekly, currentWeek);
+    process.env.DEMO_HISTORY === "1" ? demoHistory(products, currentWeek) : buildHistory(data.weekly_prices, currentWeek);
   for (const p of products) p.history = history.get(p.id) ?? [];
 
   const usedCategories = new Set(products.flatMap((p) => p.categories));
+  const lastUpdated = data.runs
+    .map((r) => r.finished_at)
+    .filter((t): t is string => Boolean(t))
+    .sort()
+    .at(-1);
   return {
     products,
-    categories: categories
+    categories: data.categories
       .filter((c) => usedCategories.has(c.slug))
       .map(({ slug, name_en, name_zh }) => ({ slug, name_en, name_zh })),
     stores: checkedStores,
-    lastUpdated: runs.find((r) => r.finished_at)?.finished_at ?? null,
+    lastUpdated: lastUpdated ?? null,
     builtAt: now.toISOString(),
   };
 }

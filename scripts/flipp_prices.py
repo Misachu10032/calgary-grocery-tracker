@@ -1,15 +1,14 @@
 """Weekly flyer collector: finds tracked products in Calgary flyers on Flipp and
-saves their prices (with price per 100 g / 100 mL) to Supabase.
+saves their prices (with price per 100 g / 100 mL) to the local database (data/prices.db).
 
 Usage:
     python scripts/flipp_prices.py              # fetch and save
     python scripts/flipp_prices.py --dry-run    # fetch and print, write nothing
 
-Reads SUPABASE_DB_URL from .env. Flipp's endpoints are unofficial and may change.
+Writes to the local SQLite database (data/prices.db). Flipp's endpoints are unofficial and may change.
 """
 import argparse
 import json
-import os
 import random
 import re
 import sys
@@ -17,11 +16,8 @@ import time
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timezone
-from pathlib import Path
 
-import psycopg2
-import psycopg2.extras
-from dotenv import load_dotenv
+from db import connect, finish_run, save_prices, start_run
 
 POSTAL_CODE = "T2P1J9"  # downtown Calgary
 FLYERS_URL = "https://flyers-ng.flippback.com/api/flipp/data?locale=en&postal_code={postal}&sid={sid}"
@@ -258,50 +254,27 @@ def price_per_unit(item, basis):
 
 # ─── Database ───────────────────────────────────────────────────────────────
 
-# Shared with scripts/saveon_prices.py.
-UPSERT_PRICE = """
-insert into prices (store_id, product_id, source, source_item_id, item_name, price, price_unit,
-                    regular_price, is_sale, per_unit, per_unit_max, unit_basis, conditions,
-                    valid_from, valid_to, url, needs_review, raw, observed_on, checked_at,
-                    pack_count, container_size, container_unit)
-values (%(store_id)s, %(product_id)s, %(source)s, %(source_item_id)s, %(item_name)s, %(price)s, %(price_unit)s,
-        %(regular_price)s, %(is_sale)s, %(per_unit)s, %(per_unit_max)s, %(unit_basis)s, %(conditions)s,
-        %(valid_from)s, %(valid_to)s, %(url)s, %(needs_review)s, %(raw)s, %(observed_on)s, now(),
-        %(pack_count)s, %(container_size)s, %(container_unit)s)
-on conflict (store_id, source, source_item_id, observed_on) do update set
-  product_id = excluded.product_id, item_name = excluded.item_name, price = excluded.price,
-  price_unit = excluded.price_unit, regular_price = excluded.regular_price, is_sale = excluded.is_sale,
-  per_unit = excluded.per_unit, per_unit_max = excluded.per_unit_max, unit_basis = excluded.unit_basis,
-  conditions = excluded.conditions, valid_from = excluded.valid_from, valid_to = excluded.valid_to,
-  url = excluded.url, needs_review = excluded.needs_review, raw = excluded.raw, checked_at = now(),
-  pack_count = excluded.pack_count, container_size = excluded.container_size,
-  container_unit = excluded.container_unit
-"""
-
-
-def load_products(cur):
-    cur.execute("""select p.id, p.slug, p.name_en, p.unit_basis, p.search_terms, p.exclude_terms, p.website_queries,
-                          coalesce(array_agg(c.slug) filter (where c.slug is not null), '{}') as categories
-                   from products p
-                   left join product_categories pc on pc.product_id = p.id
-                   left join categories c on c.id = pc.category_id
-                   where p.active and cardinality(p.search_terms) > 0
-                   group by p.id order by p.id""")
-    cols = [c.name for c in cur.description]
-    products = [dict(zip(cols, row)) for row in cur.fetchall()]
-    for product in products:
+def load_products(conn):
+    """Active tracked products with their match terms (JSON lists) and categories.
+    Shared with the other collectors."""
+    rows = conn.execute("""
+        select p.id, p.slug, p.name_en, p.unit_basis, p.search_terms, p.exclude_terms, p.website_queries,
+               coalesce(json_group_array(c.slug) filter (where c.slug is not null), '[]') as categories
+        from products p
+        left join product_categories pc on pc.product_id = p.id
+        left join categories c on c.id = pc.category_id
+        where p.active = 1
+        group by p.id order by p.id""").fetchall()
+    products = []
+    for row in rows:
+        product = dict(row)
+        for key in ("search_terms", "exclude_terms", "website_queries", "categories"):
+            product[key] = json.loads(product[key] or "[]")
+        if not product["search_terms"]:
+            continue
         product["is_fresh"] = bool(FRESH_CATEGORIES & set(product["categories"]))
+        products.append(product)
     return products
-
-
-def start_run(cur, store_id, source="flipp"):
-    cur.execute("insert into scrape_runs (store_id, source) values (%s, %s) returning id", (store_id, source))
-    return cur.fetchone()[0]
-
-
-def finish_run(cur, run_id, status, items_found, message):
-    cur.execute("""update scrape_runs set finished_at = now(), status = %s, items_found = %s, message = %s
-                   where id = %s""", (status, items_found, message, run_id))
 
 
 # ─── Collection ─────────────────────────────────────────────────────────────
@@ -354,7 +327,7 @@ def flyer_rows(detail, candidates, store_id, item_id):
             "valid_to": to_date(detail.get("valid_to")),
             "url": detail.get("ttm_url") or None,
             "needs_review": per_unit is not None and not (low <= per_unit <= high),
-            "raw": psycopg2.extras.Json(detail),
+            "raw": detail,
             "observed_on": date.today(),
         })
     return rows
@@ -395,7 +368,7 @@ def ecom_row(item, product, store_id):
         "valid_to": None,
         "url": WALMART_PRODUCT_URL.format(slug=slugify(item.get("name")), sku=item.get("sku")),
         "needs_review": per_unit is not None and not (low <= per_unit <= high),
-        "raw": psycopg2.extras.Json(slim),
+        "raw": slim,
         "observed_on": date.today(),
     }
 
@@ -482,13 +455,11 @@ def main():
     parser.add_argument("--quiet", action="store_true", help="only print the coverage summary")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
-    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
     sid = "".join(random.choice("0123456789") for _ in range(16))
-    conn = psycopg2.connect(os.environ["SUPABASE_DB_URL"])
+    conn = connect()
     try:
-        with conn.cursor() as cur:
-            products = load_products(cur)
+        products = load_products(conn)
         print(f"{len(products)} tracked products; Calgary ({POSTAL_CODE})")
 
         flyers_by_store = {}
@@ -513,12 +484,11 @@ def main():
         for store_id in sorted(set(rows_by_store) | set(flyers_by_store) | set(errors)):
             rows = rows_by_store.get(store_id, [])
             if not args.dry_run:
-                with conn.cursor() as cur:
-                    run_id = start_run(cur, store_id)
-                    psycopg2.extras.execute_batch(cur, UPSERT_PRICE, rows)
-                    status = "error" if store_id in errors and not rows else ("partial" if store_id in errors else "ok")
-                    finish_run(cur, run_id, status, len(rows), errors.get(store_id) or
-                               f"{len(flyers_by_store.get(store_id, []))} flyer(s) + search")
+                run_id = start_run(conn, store_id, "flipp")
+                save_prices(conn, rows)
+                status = "error" if store_id in errors and not rows else ("partial" if store_id in errors else "ok")
+                finish_run(conn, run_id, status, len(rows), errors.get(store_id) or
+                           f"{len(flyers_by_store.get(store_id, []))} flyer(s) + search")
                 conn.commit()
             total += len(rows)
             if not args.quiet:
