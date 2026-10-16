@@ -111,15 +111,18 @@ export function PriceBrowser({ data }: { data: SiteData }) {
       </header>
 
       <main className="mx-auto max-w-6xl px-4 pb-20 sm:px-6">
-        <section className="pb-8 pt-12 sm:pt-16">
-          <h1 className="max-w-2xl text-3xl font-semibold tracking-tight sm:text-5xl">
+        <section className="pb-5 pt-6 sm:pb-8 sm:pt-16">
+          <h1 className="max-w-2xl text-[1.7rem] font-semibold leading-tight tracking-tight sm:text-5xl">
             Find the cheapest groceries in Calgary.
           </h1>
-          <p className="mt-4 max-w-xl text-base text-neutral-600 sm:text-lg dark:text-neutral-400">
+          <p className="mt-2 max-w-xl text-sm text-neutral-600 sm:mt-4 sm:text-lg dark:text-neutral-400">
             {data.products.length} everyday items compared across {data.stores.length} stores by unit price, from
             this week&apos;s flyers and store websites.
+            {data.lastUpdated && (
+              <span className="text-neutral-400 sm:hidden"> Updated {shortDate(data.lastUpdated)}.</span>
+            )}
           </p>
-          <label className="relative mt-8 block max-w-xl">
+          <label className="relative mt-5 block max-w-xl sm:mt-8">
             <span className="sr-only">Search items</span>
             <SearchIcon className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-neutral-400" />
             <input
@@ -164,7 +167,8 @@ export function PriceBrowser({ data }: { data: SiteData }) {
                   <span className="text-sm font-normal text-neutral-400">{section.products.length}</span>
                 </h2>
               )}
-              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+              {/* grid-cols-1 (not the implicit auto column) keeps long item names from widening the page on phones */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3">
                 {section.products.map((p) => (
                   <ProductCard
                     key={p.id}
@@ -236,7 +240,7 @@ function PriceHistory({ history, weightUnit }: { history: PriceHistoryEntry[]; w
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between gap-2 rounded-2xl px-3 py-2 text-xs font-medium text-neutral-600 transition hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-white/10"
+        className="flex w-full items-center justify-between gap-2 rounded-2xl px-3 py-3 text-xs font-medium text-neutral-600 transition hover:bg-neutral-100 sm:py-2 dark:text-neutral-300 dark:hover:bg-white/10"
       >
         <span className="flex items-center gap-1.5">
           <HistoryIcon className="h-3.5 w-3.5" />
@@ -295,7 +299,7 @@ function WeightToggle({ value, onChange }: { value: WeightUnit; onChange: (unit:
             role="radio"
             aria-checked={value === unit.value}
             onClick={() => onChange(unit.value)}
-            className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+            className={`rounded-full px-4 py-2 text-xs font-semibold transition sm:px-3 sm:py-1 ${
               value === unit.value
                 ? "bg-emerald-600 text-white shadow-sm"
                 : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-white/10"
@@ -326,12 +330,20 @@ function ProductCard({
   const hidden = product.prices.length - shown.length;
 
   return (
-    <article className="group flex flex-col rounded-3xl border border-black/5 bg-white p-3 shadow-sm transition duration-300 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/5 dark:border-white/10 dark:bg-neutral-900 dark:hover:shadow-black/40">
-      <ProductImage src={product.image} alt={product.name_en} category={product.categories[0]} />
+    <article className="group flex min-w-0 flex-col rounded-3xl border border-black/5 bg-white p-3 shadow-sm transition duration-300 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/5 dark:border-white/10 dark:bg-neutral-900 dark:hover:shadow-black/40">
+      {/* Big banner photo from tablet size up; phones get a small thumbnail next to the name. */}
+      <div className="hidden sm:block">
+        <ProductImage src={product.image} alt={product.name_en} category={product.categories[0]} />
+      </div>
 
-      <div className="flex flex-1 flex-col px-2 pb-2 pt-4">
+      <div className="flex flex-1 flex-col px-1 pb-1 pt-1 sm:px-2 sm:pb-2 sm:pt-4">
         <div className="flex items-start justify-between gap-3">
-          <h3 className="min-w-0 text-lg font-semibold leading-snug tracking-tight">{product.name_en}</h3>
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="w-16 shrink-0 sm:hidden">
+              <ProductImage src={product.image} alt="" category={product.categories[0]} compact />
+            </div>
+            <h3 className="min-w-0 text-base font-semibold leading-snug tracking-tight sm:text-lg">{product.name_en}</h3>
+          </div>
           {best && best.per_unit != null && (
             <div className="shrink-0 rounded-2xl bg-emerald-50 px-3 py-2 text-right dark:bg-emerald-500/10">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
@@ -370,7 +382,7 @@ function ProductCard({
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            className="mt-1 self-start rounded-full px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-500/10"
+            className="mt-1 self-start rounded-full px-3 py-2 text-xs font-medium text-emerald-700 hover:bg-emerald-50 sm:px-2 sm:py-1 dark:text-emerald-400 dark:hover:bg-emerald-500/10"
           >
             Show {hidden} more store{hidden > 1 ? "s" : ""}
           </button>
@@ -446,7 +458,7 @@ function PriceRow({
             href={href}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900 dark:hover:bg-white/10 dark:hover:text-white"
+            className="-mr-1 inline-flex items-center gap-1 rounded-full px-3 py-2 text-xs font-medium text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900 sm:mr-0 sm:px-2 sm:py-1 dark:hover:bg-white/10 dark:hover:text-white"
           >
             {price.url ? "View" : "Store"}
             <ExternalIcon className="h-3 w-3" />

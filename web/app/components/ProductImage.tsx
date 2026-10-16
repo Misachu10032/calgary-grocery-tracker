@@ -12,18 +12,27 @@ const THEMES: Record<string, Theme> = {
 };
 const FALLBACK: Theme = { icon: ImageIcon, tile: "from-neutral-100 to-neutral-50 dark:from-neutral-800 dark:to-neutral-900", ink: "text-neutral-400" };
 
-type Props = { src: string | null; alt: string; category?: string };
+type Props = {
+  src: string | null;
+  alt: string;
+  category?: string;
+  compact?: boolean; // small square thumbnail (phones) instead of the wide banner
+};
 
 /** Product photo, or a soft category placeholder until a photo is added. */
-export function ProductImage({ src, alt, category }: Props) {
+export function ProductImage({ src, alt, category, compact = false }: Props) {
   const theme = (category && THEMES[category]) || FALLBACK;
   const Icon = theme.icon;
   return (
-    <div className="relative aspect-[16/10] w-full overflow-hidden rounded-2xl">
+    <div className={`relative w-full overflow-hidden ${compact ? "aspect-square rounded-xl" : "aspect-[16/10] rounded-2xl"}`}>
       {src ? (
         // Photos come from arbitrary hosts (Supabase, store CDNs) or /public; a plain img keeps that simple.
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt={alt} loading="lazy" className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
+      ) : compact ? (
+        <div className={`flex h-full w-full items-center justify-center bg-gradient-to-br ${theme.tile}`}>
+          <Icon className={`h-6 w-6 ${theme.ink}`} />
+        </div>
       ) : (
         <div className={`flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br ${theme.tile}`}>
           <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/80 shadow-sm ring-1 ring-black/5 backdrop-blur dark:bg-white/10 dark:ring-white/10">
