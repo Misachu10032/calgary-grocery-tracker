@@ -5,7 +5,7 @@ import type { Category, Price, PriceHistoryEntry, Product, SiteData, Store, Unit
 const HISTORY_WEEKS = 6; // previous weeks shown in each item's price history
 
 // Written by scripts/export_site_data.py from the local SQLite database and
-// committed to git; pushing a new version makes Vercel rebuild the site.
+// committed to git; pushing a new version makes GitHub Pages rebuild the site.
 const DATA_FILE = path.join(process.cwd(), "data", "site-data.json");
 
 // Product photos dropped into public/products/<slug>.<ext> are picked up at build time.

@@ -6,7 +6,8 @@ Usage:
     python scripts/run_weekly.py --skip-tnt   # skip T&T (it opens a Chrome window)
 
 Each collector runs on its own; one failing (e.g. a store blocking us) doesn't stop
-the others. Pushing the updated web/data/site-data.json makes Vercel rebuild the site.
+the others. Pushing the updated web/data/site-data.json makes GitHub Pages rebuild the site
+(.github/workflows/pages.yml).
 """
 import argparse
 import subprocess
@@ -44,7 +45,8 @@ def publish():
         print("No git remote configured: committed locally, not pushed.")
         return
     push = git("push")
-    print("Pushed: Vercel will rebuild the site." if push.returncode == 0 else f"Push failed: {push.stderr.strip()}")
+    print("Pushed: GitHub Pages will rebuild the site in a minute or two." if push.returncode == 0
+          else f"Push failed: {push.stderr.strip()}")
 
 
 def main():
