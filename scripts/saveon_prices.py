@@ -73,6 +73,11 @@ def build_row(item, product, rsid):
         return None
     basis = product["unit_basis"]
     size = size_of(item)
+    # Save-On keeps the size out of the name, so apply the product's minimum here too
+    # (e.g. skip 500 mL bottles when tracking 2 L bottles and multipacks).
+    minimum = product.get("min_volume_ml")
+    if minimum and size and size[1] == "ml" and size[0] < minimum:
+        return None
     per_unit = None
     pack_count = container_size = container_unit = None
 

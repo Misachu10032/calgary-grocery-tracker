@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS products (
   exclude_terms    TEXT NOT NULL DEFAULT '[]',  -- JSON array
   website_queries  TEXT NOT NULL DEFAULT '[]',  -- JSON array: phrases searched on store sites
   image_url        TEXT,                        -- optional photo; else web/public/products/<slug>.*
+  min_volume_ml    INTEGER,                     -- skip listings smaller than this in total (e.g. single cans of pop)
   active           INTEGER NOT NULL DEFAULT 1
 );
 

@@ -19,8 +19,22 @@ def connect(path=DB_PATH):
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))  # idempotent
+    _add_missing_columns(conn)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+# Columns added after the first release; CREATE TABLE IF NOT EXISTS won't add them to an
+# existing database, so add them here (table, column, type).
+LATER_COLUMNS = [("products", "min_volume_ml", "INTEGER")]
+
+
+def _add_missing_columns(conn):
+    for table, column, sql_type in LATER_COLUMNS:
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
+    conn.commit()
 
 
 UPSERT_PRICE = """

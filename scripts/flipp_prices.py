@@ -122,6 +122,8 @@ LIQUID_SIZE = re.compile(r"\d\s*(?:ml|l)\b")  # "600ml", "1 L": fresh items are 
 def matches(text, product):
     """Search terms must match whole words; exclude terms match word prefixes
     ('flavour' also rejects 'flavoured'), so exclusion errs on the safe side."""
+    if not big_enough(text, product):
+        return False
     text = normalise(text)
     fresh = product.get("is_fresh")
     if fresh and LIQUID_SIZE.search(text):
@@ -134,7 +136,18 @@ def matches(text, product):
 # ─── Price per 100 g / 100 mL ───────────────────────────────────────────────
 
 NUM = r"(\d+(?:\.\d+)?)"
-UNIT = r"(KG|G|ML|L|LB|LBS)\b"
+UNIT_NAMES = r"(MILLILITRES?|MILLILITERS?|LITRES?|LITERS?|KG|G|ML|L|LBS|LB)"  # Save-On spells out "2 Litre"
+UNIT = UNIT_NAMES + r"\b"
+
+
+def big_enough(text, product):
+    """False when the listing's printed total volume is below the product's minimum
+    (e.g. single cans when tracking 2 L bottles and multipacks). Unknown sizes pass."""
+    minimum = product.get("min_volume_ml")
+    if not minimum:
+        return True
+    size = parse_size(text)
+    return not (size and size[2] == "ml" and size[1] < minimum)
 
 
 def to_base(value, unit):
@@ -147,9 +160,9 @@ def to_base(value, unit):
         return value, "g"
     if unit in ("LB", "LBS"):
         return value * LB_IN_G, "g"
-    if unit == "L":
+    if unit == "L" or unit.startswith(("LITRE", "LITER")):
         return value * 1000, "ml"
-    return value, "ml"
+    return value, "ml"  # ML, MILLILITRE(S), MILLILITER(S)
 
 
 def parse_size(text):
@@ -163,6 +176,10 @@ def parse_size(text):
     m = re.search(rf"(\d+)\s*[X×]\s*{NUM}\s*{UNIT}", t)
     if m:
         amount, base = to_base(float(m.group(1)) * float(m.group(2)), m.group(3))
+        return amount, amount, base, up_to
+    m = re.search(rf"{NUM}\s*{UNIT_NAMES}\s*[X×]\s*(\d+)\b", t)  # size first: '355mlx12' (T&T)
+    if m:
+        amount, base = to_base(float(m.group(1)) * float(m.group(3)), m.group(2))
         return amount, amount, base, up_to
     m = re.search(rf"{NUM}\s*(?:-|–|/|TO)\s*{NUM}\s*{UNIT}", t)
     if m:
@@ -191,6 +208,10 @@ def parse_pack(text):
     if m:
         size, unit = to_base(m.group(3) or m.group(2), m.group(4))
         return int(m.group(1)), size, unit
+    m = re.search(rf"{NUM}\s*(ML|L|G|KG)\s*[X×]\s*(\d+)\b", t)  # size first: '355mlx12' (T&T)
+    if m:
+        size, unit = to_base(m.group(1), m.group(2))
+        return int(m.group(3)), size, unit
     count_match = re.search(r"(\d+)\s*(?:-\s*)?(?:PACK|PK|CANS|BOTTLES|CT)\b", t)
     count = int(count_match.group(1)) if count_match else 1
     m = re.search(rf"{NUM}\s*(ML|L)\b", t)
@@ -259,6 +280,7 @@ def load_products(conn):
     Shared with the other collectors."""
     rows = conn.execute("""
         select p.id, p.slug, p.name_en, p.unit_basis, p.search_terms, p.exclude_terms, p.website_queries,
+               p.min_volume_ml,
                coalesce(json_group_array(c.slug) filter (where c.slug is not null), '[]') as categories
         from products p
         left join product_categories pc on pc.product_id = p.id
