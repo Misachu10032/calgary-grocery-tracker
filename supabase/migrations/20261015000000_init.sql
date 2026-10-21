@@ -211,7 +211,7 @@ insert into categories (slug, name_en, name_zh, sort_order) values
   ('fruit',      'Fruit',               '水果',       40),
   ('dairy-eggs', 'Dairy & Eggs',        '乳制品和蛋', 50),
   ('pantry',     'Pantry',              '主食粮油',   60),
-  ('gym',        'Gym / High protein',  '健身高蛋白', 70);
+  ('gym',        'Gym',  '健身高蛋白', 70);
 
 insert into products (slug, name_en, name_zh, unit_basis) values
   ('chicken-breast-boneless-skinless', 'Chicken breast, boneless skinless', '去骨去皮鸡胸肉', '100g');
