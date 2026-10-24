@@ -10,6 +10,9 @@
 /data/*.db-wal
 /data/*.db-shm
 
+# Weekly job logs (scripts/run_weekly.cmd)
+/logs/
+
 # Python
 __pycache__/
 *.pyc

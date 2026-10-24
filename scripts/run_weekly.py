@@ -10,9 +10,12 @@ the others. Pushing the updated web/data/site-data.json makes GitHub Pages rebui
 (.github/workflows/pages.yml).
 """
 import argparse
+import os
+import shutil
 import subprocess
 import sys
 from datetime import date
+from pathlib import Path
 
 from db import ROOT
 from export_site_data import OUT_PATH
@@ -26,8 +29,23 @@ COLLECTORS = [
 ]
 
 
+def find_git():
+    """git.exe path. Task Scheduler and double-clicked .cmd files often run without Git's
+    folder on PATH, so also check the standard Git for Windows install locations."""
+    candidates = [shutil.which("git")]
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"), os.environ.get("LOCALAPPDATA")):
+        if base:
+            candidates += [str(Path(base) / "Git" / "cmd" / "git.exe"), str(Path(base) / "Programs" / "Git" / "cmd" / "git.exe")]
+    return next((c for c in candidates if c and Path(c).exists()), None)
+
+
+GIT = find_git()
+
+
 def git(*args):
-    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True)
+    if not GIT:
+        raise RuntimeError("git not found: install Git for Windows or add it to PATH")
+    return subprocess.run([GIT, "-C", str(ROOT), *args], capture_output=True, text=True)
 
 
 def publish():
